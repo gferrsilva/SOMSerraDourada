@@ -28,3 +28,7 @@ library(pheatmap) # Dissimilarity Matrix
 * [Lucy Takehara Chemale](http://lattes.cnpq.br/6291856399463658)
 * Igor Vasconcelos Santana
 * Nilson Francisquini Botelho
+
+## Copyright and License
+
+The source code for this work is licensed based on the GNU GENERAL PUBLIC LICENSE, see [LICENSE](LICENSE).
