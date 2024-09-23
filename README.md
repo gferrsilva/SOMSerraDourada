@@ -8,6 +8,9 @@ This study explores the use of Self-Organizing Maps (SOM) combined with hierarch
 ## Depends:
 R (≥ 4.3.1).
 
+## Data:
+Raw data is larger than 25MB can be download in the following link [via Google Drive](https://drive.google.com/file/d/1wnh6f0XjAUU4V6UY0IkB9xD8KFee4Pw1/view?usp=sharing).
+
 ## Imports
 ``` r
 library(tidyverse) # ggplot, dplyr, readr, tibble, readr
