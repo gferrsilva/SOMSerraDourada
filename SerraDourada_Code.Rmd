@@ -1,0 +1,557 @@
+---
+title: "SOMSerraDourada"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+Paper: Unveiling Geological Complexity in the Serra Dourada Granite Using Self-Organizing Maps and Hierarchical Clustering: Insights for REE Prospecting in the Goiás Tin Province, Central Brazil
+
+Authors: Ferreira da Silva, G.; Ferreira, M.V., Chemale, L.T.;
+Santana, I.V.; Botelho, N.F. 2024.
+
+Abstract: This study explores the use of Self-Organizing Maps (SOM) combined with hierarchical clustering to provide insights into the geological differentiation and mineral prospecting in the Serra Dourada Granite (SDG), part of the Goiás Tin Province. After some issues on the geological cartography of the SDG based on traditional approaches, such as the interpretation of outcrops and the limited geochemistry data, often struggle to capture the complexity of high-dimensional geophysical datasets. To address this, we apply unsupervised machine learning techniques to segment airborne geophysical data, providing a more nuanced understanding of the SDG internal structure. Using airborne gamma-ray data, we employed SOM for dimensionality reduction and data segmentation, supported by hierarchical clustering. This methodology enabled us to identify distinct geological units with greater accuracy and resolution than traditional methods such as Principal Component Analysis (PCA). The SOM-based approach retained the data's original topology and revealed fine-scale patterns within the dataset, distinguishing between areas affected by magmatic processes and those influenced by post-magmatic hydrothermalism and supergene leaching. The results indicate that some clusters are mainly associated with magmatic differentiation, characterized by average concentrations of potassium (K), equivalent thorium (eTh), and equivalent uranium (eU) and others show evidence of secondary processes, including hydrothermal alteration and weathering. Notably, Cluster 4 is spatially linked to REE-enriched plateaus and the Serra Verde Mine, reinforcing its significance for mineral exploration. The SOM model proved more effective than PCA at capturing non-linear relationships within the data. While PCA provided insights into the primary variance, it did not fully account for the complex geological processes at play. In contrast, the SOM model segmented the data into clusters that reflected both broad geophysical trends and localized variations, particularly in areas influenced by hydrothermalism and supergene processes. Our findings underscore the value of machine learning techniques, particularly SOM, in geoscientific data analysis. This approach provides a robust framework for integrating multivariate geophysical data, offering valuable insights for geological mapping and mineral exploration, especially in regions with complex geological histories. The methodology presented here can be adapted to other geological settings, enhancing the accuracy of subsurface mapping and identifying areas of economic interest, such as Rare Earth Element (REE) and other critical mineral deposits. 
+
+Keywords: Unsupervised Segmentation; Compositional Data Analysis; Clustering Algorithms; Machine Learning Applications in Geoscience; Dimensionality Reduction
+
+```{r,warning=FALSE}
+# Setting up the enviroment
+setwd('~/GitHub/GoiasTinProvince/data') # Working direction
+set.seed(0) # Random State
+```
+
+Predifined Functions
+
+```{r}
+# Color Pallette
+coolBlueHotRed <- function(n, alpha = 1) {
+  rainbow(n, end=4/6, alpha=alpha)[n:1]
+}
+
+# Traning SOM for iterations
+training_som <- function(xdim = 10,ydim = 15,rlen = 100,k = 8){
+  som_grid <- kohonen::somgrid(xdim = xdim,ydim = ydim,
+                               topo = 'hexagonal',
+                               toroidal = TRUE,
+                               neighbourhood.fct = 'gaussian')
+  set.seed(0)
+  print(paste('xdim: ',xdim,', ydim: ',ydim,' rlen: ',rlen,' Time: ',system.time(som_model <- kohonen::som(data_train,
+                                                                                                           grid = som_grid,
+                                                                                                           rlen = rlen,
+                                                                                                           keep.data = TRUE))[3]
+  ))
+  
+  mydata <- kohonen::getCodes(som_model) # Assigning data to closest neuron
+  cut_avg <- cutree(hclust(dist(mydata), method = 'average'), k = k)
+  
+  cluster_assignment <- cut_avg[som_model$unit.classif]
+  
+  df$hc_avg <- cluster_assignment
+  
+  (p1 <- ggplot(df, aes(x = Longitude,
+                       y = Latitude,
+                       fill = as.factor(hc_avg))) +
+    geom_raster() +
+    coord_equal() +
+    scale_fill_viridis_d(option = 'B') +
+    theme_classic() +
+    labs(title = paste0('xdim: ',xdim,', ydim: ',ydim,', rlen: ',rlen,' and k: ',k),
+         fill = 'Cluster') +
+    theme(axis.text.x = element_text(angle = 90,
+                                     vjust = .5))
+    )
+  ggsave(filename = paste('figure/som',xdim,ydim,rlen,'.pdf',sep = '_'),width = 8,height = 8,device = 'pdf',plot = p1)  
+}
+
+# Radar plot
+coord_radar <- function (theta = "x", start = 0, direction = 1) {
+  theta <- match.arg(theta, c("x", "y"))
+  r <- if (theta == "x") "y" else "x"
+  ggproto("CordRadar", CoordPolar, theta = theta, r = r, start = start, 
+          direction = sign(direction),
+          is_linear = function(coord) TRUE)
+}
+
+```
+
+Importing libraries
+
+```{r,warning=FALSE}
+library(tidyverse) # ggplot, dplyr, readr, tibble, readr
+library(factoextra) # Cluster Vis and PCA
+library(geoquimica) # Data transformation
+library(kohonen) # Self Organizing Maps
+library(doParallel) # Parallel Computing
+library(foreach) # For loops
+library(circlize) # Data vis
+library(ggpubr) # Data vis
+library(dendextend) # Dendograms and HClustering
+library(pheatmap) # Dissimilarity matrix
+```
+
+Importing and previewing data:
+
+```{r}
+df_raw <- readRDS('~/GitHub/GoiasTinProvince/data/gamma_GSD.RDS') %>%
+  filter(!is.na(X)) %>%
+  select(c('X','Y','KPERC','eTH','eU','CT')) %>%
+  rename(Longitude = X,
+         Latitude = Y,
+         TC = CT,
+         K = KPERC) %>%
+  mutate(Ki = eTH*(mean(K, na.rm = TRUE)/mean(eTH, na.rm = TRUE)),
+         Ui = eTH*mean(eU, na.rm = TRUE)/mean(eTH, na.rm = TRUE)) %>%
+  mutate(Kd = K - Ki,
+         Ud = eU - Ui,
+         K_TH = K/eTH
+  )
+
+head(df_raw)
+```
+Data Preparation:
+
+```{r}
+# Processing ----
+
+# Min-max feature scaling
+df_norm <- df_raw %>%
+  elem_norm(method = 'minmax',
+            keep = c('Longitude', 'Latitude')) %>%
+  select(-Ki,-Ui,-TC)
+
+summary(df_norm)
+
+# CLR transformation
+df_clr <- df_raw %>%
+  elem_norm(method = 'clr',
+            keep = c('Longitude', 'Latitude','Kd','Ud')) %>%
+  elem_norm(method = 'minmax', keep = c('Longitude', 'Latitude')) %>%
+  dplyr::select(-Ki,-Ui,-TC)
+
+summary(df_clr)
+```
+Principal Components Analysis
+```{r}
+# PCA
+pca <- prcomp(x = df_clr[3:8],center = TRUE,scale. = TRUE)
+
+summary(pca)
+
+df <- bind_cols(df_clr, as_tibble(pca$x[,1:6])) # apending results
+
+```
+
+View Features:
+```{r, fig.height=12,fig.width=12}
+# Plot Feature Maps ----
+## Min-Max
+raw.plot <- ggplot(df_norm %>%
+                      gather(key = 'Variables',value = 'Value', 3:8) %>%
+                      mutate(Variables = factor(Variables,levels = c('K',
+                                                                     'eTH',
+                                                                     'eU',
+                                                                     'Kd',
+                                                                     'Ud',
+                                                                     'K_TH'
+                      ))),
+                    aes(x = Longitude, y = Latitude, fill = Value)) +
+   geom_raster() +
+   coord_equal() +
+   scale_fill_gradientn(colors = pals::turbo(8)) +
+   facet_wrap(. ~ Variables,nrow = 1) +
+   theme_classic() +
+   theme(axis.text.x = element_text(
+     angle = 90,
+     vjust = 0.5),
+     legend.direction = 'horizontal',
+     legend.position = 'bottom')  +
+   labs(fill = 'Scaled Values')
+
+## CLR
+clr.plot <- ggplot(df_clr %>%
+                      gather(key = 'Variables',value = 'Value', 3:8) %>%
+                      mutate(Variables = factor(Variables,levels = c('K',
+                                                                     'eTH',
+                                                                     'eU',
+                                                                     'Kd',
+                                                                     'Ud',
+                                                                     'K_TH'
+                      ))),
+                    aes(x = Longitude, y = Latitude, fill = Value)) +
+    geom_raster() +
+    coord_equal() +
+    scale_fill_gradientn(colors = pals::turbo(8)) +
+    facet_wrap(. ~ Variables,nrow = 1) +
+    theme_classic() +
+    theme(axis.text.x = element_text(
+      angle = 90,
+      vjust = 0.5),
+      legend.direction = 'horizontal',
+      legend.position = 'bottom')   +
+    labs(fill = 'CLR + Scaled Values')
+
+## Principal Components maps
+pca.plot <- ggplot(df %>%
+                      geoquimica::elem_norm(keep = c('Longitude', 'Latitude')) %>%
+                      gather(key = 'Components',value = 'PCA', 9:14),
+                    aes(x = Longitude, y = Latitude, fill = PCA)) +
+    geom_raster() +
+    coord_equal() +
+    scale_fill_gradientn(colors = pals::turbo(8)) +
+    # scale_fill_viridis_c() +
+    facet_wrap(. ~ Components,nrow = 1) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90,vjust = 0.5),
+          legend.direction = 'horizontal',legend.position = 'bottom')
+
+ggarrange(raw.plot,clr.plot,pca.plot,ncol = 1,labels = c('a)','b)','c)'))
+
+```
+View PCA Matrix
+
+```{r,warning=FALSE,fig.height=12,fig.width=12}
+p1 <-
+  pca$x %>%
+  as_tibble() %>%
+  ggplot(aes(x = PC1)) +
+  geom_density(alpha = .6, fill = 'grey') +
+  geom_vline(xintercept = 0.25) +
+  labs(x = paste0('PC1 (',round(100*data.frame(summary(pca)[6])[2,1],1),'% of variance)')) +
+  theme(axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(fill = NA))
+
+p2 <- 
+  fviz_pca_var(pca,
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             axes = c(1,2), #controla quais eixos devem ser mostrados na figura
+             repel = TRUE     # Avoid text overlapping
+) +
+  labs(title = '')
+
+p3 <-
+  fviz_pca_var(pca,
+               gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+               axes = c(1,3), #controla quais eixos devem ser mostrados na figura
+               repel = TRUE     # Avoid text overlapping
+  ) +
+  labs(title = '')
+
+p4 <-
+  fviz_pca_var(pca,
+               gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+               axes = c(1,4), #controla quais eixos devem ser mostrados na figura
+               repel = TRUE     # Avoid text overlapping
+  ) +
+  labs(title = '')
+
+p5 <-
+  fviz_pca_ind(pca,
+             col.ind = "cos2", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = F,      # Avoid text overlapping
+             axes = c(1,2), #controla quais eixos devem ser mostrados na figura
+             geom = c("point")
+) +
+  theme(legend.position = 'none') +
+  labs(title = '')
+
+p6 <-
+  pca$x %>%
+  as_tibble() %>%
+  ggplot(aes(x = PC2)) +
+  geom_density(alpha = .6, fill = 'grey') +
+  geom_vline(xintercept = 0) +
+  labs(x = paste0('PC2 (',round(100*data.frame(summary(pca)[6])[2,2],1),'% of variance)')) +
+  theme(axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(fill = NA))
+
+p7 <-
+  fviz_pca_var(pca,
+               gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+               axes = c(2,3), #controla quais eixos devem ser mostrados na figura
+               repel = TRUE     # Avoid text overlapping
+  ) +
+  labs(title = '')
+
+p8 <-
+  fviz_pca_var(pca,
+               gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+               axes = c(2,4), #controla quais eixos devem ser mostrados na figura
+               repel = TRUE     # Avoid text overlapping
+  ) +
+  labs(title = '')
+
+p9 <-
+  fviz_pca_ind(pca,
+               col.ind = "cos2", # Color by the quality of representation
+               gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+               repel = F,      # Avoid text overlapping
+               axes = c(1,3), #controla quais eixos devem ser mostrados na figura
+               geom = c("point")
+  ) +
+  theme(legend.position = 'none') +
+  labs(title = '')
+
+p10 <-
+  fviz_pca_ind(pca,
+             col.ind = "cos2", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = F,      # Avoid text overlapping
+             axes = c(2,3), #controla quais eixos devem ser mostrados na figura
+             geom = c("point")
+) +
+  theme(legend.position = 'none') +
+  labs(title = '')
+
+p11 <-
+  pca$x %>%
+  as_tibble() %>%
+  ggplot(aes(x = PC3)) +
+  geom_density(alpha = .6, fill = 'grey') +
+  geom_vline(xintercept = 0.1) +
+  labs(x = paste0('PC3 (',round(100*data.frame(summary(pca)[6])[2,3],1),'% of variance)')) +
+  theme(axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(fill = NA))
+
+p12 <-
+  fviz_pca_var(pca,
+               gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+               axes = c(3,4), #controla quais eixos devem ser mostrados na figura
+               repel = TRUE     # Avoid text overlapping
+  ) +
+  labs(title = '')
+
+p13 <-
+  fviz_pca_ind(pca,
+               col.ind = "cos2", # Color by the quality of representation
+               gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+               repel = F,      # Avoid text overlapping
+               axes = c(1,4), #controla quais eixos devem ser mostrados na figura
+               geom = c("point")
+  ) +
+  theme(legend.position = 'none') +
+  labs(title = '')
+
+p14 <-
+  fviz_pca_ind(pca,
+             col.ind = "cos2", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = F,      # Avoid text overlapping
+             axes = c(2,4), #controla quais eixos devem ser mostrados na figura
+             geom = c("point")
+) +
+  theme(legend.position = 'none') +
+  labs(title = '')
+
+p15 <-
+  fviz_pca_ind(pca,
+             col.ind = "cos2", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = F,      # Avoid text overlapping
+             axes = c(3,4), #controla quais eixos devem ser mostrados na figura
+             geom = c("point")
+) +
+  theme(legend.position = 'none') +
+  labs(title = '')
+
+p16 <-
+  pca$x %>%
+  as_tibble() %>%
+  ggplot(aes(x = PC4)) +
+  geom_density(alpha = .6, fill = 'grey') +
+  geom_vline(xintercept = .08) +
+  labs(x = paste0('PC4 (',round(100*data.frame(summary(pca)[6])[2,4],1),'% of variance)')) +
+  theme(axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(fill = NA))
+
+ggarrange(p1,p2,p3,p4,
+          p5,p6,p7,p8,
+          p9,p10,p11,p12,
+          p13,p14,p15,p16,
+          ncol = 4,nrow = 4)
+
+remove(p1,p2,p3,p4,
+          p5,p6,p7,p8,
+          p9,p10,p11,p12,
+          p13,p14,p15,p16)
+```
+Training Self Organizing Maps
+```{r}
+# SOM
+
+data_train <- as.matrix(df[,c('K',
+                              'eTH',
+                              'eU',
+                              'Kd',
+                              'Ud',
+                              'K_TH'
+)])
+
+xdim <- c(15,24,30)
+ydim <- c(20,32,40)
+rlen <- c(10,100,300,500,1000)
+```
+
+In this session we iterated between grid arrange and rlen on the SOM training:
+```{r}
+# registerDoParallel(cores = parallel::detectCores()-1)
+# foreach(xdim = xdim) %do% {
+#   foreach(ydim = ydim) %do% {
+#     foreach(rlen = rlen) %do% {
+#       training_som(xdim = xdim,ydim = ydim,rlen = rlen)
+#     }
+#   }
+# }
+# 
+# plot(p1)
+```
+Training Selected Model
+```{r}
+# ## Defining the configuration of Neurons
+som_grid <- kohonen::somgrid(xdim = 24,ydim = 32,
+                             topo = 'hexagonal',
+                             toroidal = TRUE,
+                             neighbourhood.fct = 'gaussian')
+# ## Training Kohonen Maps
+set.seed(0)
+som_model <- 
+  kohonen::som(data_train,
+                                      grid = som_grid,
+                                      rlen = 300,
+                                      keep.data = TRUE)
+
+summary(som_model) # Summary
+
+```
+
+View changes during different epochs for SOM model
+
+```{r}
+plot(som_model, type = 'changes') # Average distance of neurons by epochs
+```
+Hierarchical Clustering
+```{r}
+mydata <- kohonen::getCodes(som_model) # Assigning data to closest neuron
+
+dist_mat <- dist(mydata,method = 'euclidean') # Building distance matrix with euclidean distances
+
+hclust_avg <- hclust(dist_mat, method = 'average')
+
+cut_avg <- cutree(hclust_avg, k = 8) # determining the number of clusters
+# get vector with cluster value for each original data sample
+cluster_assignment <- cut_avg[som_model$unit.classif]
+# for each of analysis, add the assignment as a column in the original data:
+df$hc_avg <- cluster_assignment
+
+glimpse(df)
+```
+Plotting the Dendogram
+```{r}
+avg_dend_obj <- as.dendrogram(hclust_avg)
+
+avg_col_dend <- color_branches(avg_dend_obj,h=.325)
+
+circlize_dendrogram(avg_col_dend,
+                    labels_track_height = NA,
+                    dend_track_height = 0.5,labels = FALSE)
+```
+Plotting the Dissimilarity Matrix
+```{r}
+pheatmap(as.matrix(dist_mat),
+         clustering_distance_rows = dist_mat,
+         clustering_distance_cols = dist_mat,
+         show_rownames = FALSE,
+         show_colnames = FALSE)
+```
+
+Clustered Kohonen Maps for each feature
+```{r, fig.height=6,fig.width=8}
+nome <- c('KPERC','eTH','eU','Kd','Ud','K_TH')
+
+par(mfrow=c(2,4), mai = c(5, 5, 5, 5)
+)
+for (j in 1:6){
+  plot(som_model,type="property",
+       shape = 'straight',
+       property = getCodes(som_model)[,j],
+       palette.name=coolBlueHotRed,
+       main=nome[j],
+       cex=0.5)
+  add.cluster.boundaries(som_model, lwd = 3,
+                         cut_avg)
+}
+par(mfrow=c(1,1))
+
+
+```
+Distance plot for Kohonen Maps 
+```{r}
+plot(som_model, type="dist.neighbours",
+     main = "SOM neighbour distances",
+     palette.name=coolBlueHotRed, shape = 'straight'
+)
+add.cluster.boundaries(som_model, lwd = 3,
+                       cut_avg)
+```
+
+Map of Clustered Serra Dourada Granite
+```{r, fig.height=12, fig.width=8}
+# DATA VIS ----
+## Mapa de Cluster
+ggplot(df, aes(x = Longitude,
+               y = Latitude,
+               fill = as.factor(hc_avg))) +
+  geom_raster() +
+  coord_equal() +
+  scale_fill_viridis_d(option = 'B') +
+  theme_classic() +
+  labs(fill = 'Round 1') +
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = .5))
+```
+Radar plot for each Cluster
+```{r}
+df %>%
+  group_by(hc_avg) %>%
+  summarize(KPERC = median(K),
+            eTH = median(eTH),
+            eU = median(eU),
+            Kd = median(Kd),
+            Ud = median(Ud),
+            K_TH = median(K_TH)) %>%
+  ungroup() %>%
+  gather(value = "value", key = 'key',2:7) %>%
+  ggplot(aes(x = key, y = value, col = as.factor(hc_avg),
+             group = hc_avg)) +
+  geom_line() +
+  geom_point() +
+  coord_radar() +
+  scale_color_viridis_d(option = 'B') +
+  scale_fill_viridis_d(option = 'B') +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank()) +
+  facet_wrap(. ~ hc_avg)
+```
+
