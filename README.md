@@ -1,8 +1,3 @@
-<div style="width: 30%; height: 30%">
-  
-![jpeg](Images/Dissimilarity.jpg) 
-
-</div>
 
 # SOMSerraDourada
 
