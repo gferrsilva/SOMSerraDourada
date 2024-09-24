@@ -37,7 +37,7 @@ library(pheatmap) # Dissimilarity matrix
 
 ## Authors:
 * [Guilherme Ferreira da Silva](https://cutt.ly/RdsGmT5), (SGB) (Mail to: guilherme.ferreira@sgb.gov.br)
-* [Marcos Vinícius Ferreira](https://github.com/marcosbr) (SGB)
+* [Marcos Vinícius Ferreira](https://github.com/marcosbr) (SGB) (Mail to: marcos.ferreira@sgb.gov.br)
 * Lucy Takehara Chemale (SGB)
 * Igor Vasconcelos Santana (UFMG)
 * Nilson Francisquini Botelho (UnB)
